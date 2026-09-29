@@ -1,9 +1,6 @@
-﻿using ECommerceAppMorning.Server.Data;
-using ECommerceAppMorning.Server.DTOs.Cart;
-using ECommerceAppMorning.Server.Entities;
-using Microsoft.AspNetCore.Http;
+﻿using ECommerceAppMorning.Server.DTOs.Cart;
+using ECommerceAppMorning.Server.Services;
 using Microsoft.AspNetCore.Mvc;
-using Microsoft.EntityFrameworkCore;
 
 namespace ECommerceAppMorning.Server.Controllers
 {
@@ -11,157 +8,49 @@ namespace ECommerceAppMorning.Server.Controllers
     [Route("api/[controller]")]
     public class CartController : ControllerBase
     {
-        private readonly AppDbContext _context;
+        private readonly ICartService _cartService;
 
-        public CartController(AppDbContext context)
+        public CartController(ICartService cartService)
         {
-            _context = context;
+            _cartService = cartService;
         }
 
         [HttpGet("{userId:int}")]
         public async Task<IActionResult> GetCart(int userId)
         {
-            var cart = await _context.Carts
-                .Include(x => x.Items)
-                .ThenInclude(x => x.Product)
-                .FirstOrDefaultAsync(x => x.UserId == userId);
-
-            if (cart is null)
-            {
-                return Ok(new
-                {
-                    id = 0,
-                    userId,
-                    items = Array.Empty<object>(),
-                    total = 0
-                });
-            }
-
-            var items = cart.Items.Select(x => new
-            {
-                id = x.Id,
-                productId = x.ProductId,
-                name = x.Product.Name,
-                price = x.Product.Price,
-                imageUrl = x.Product.ImageUrl,
-                quantity = x.Quantity,
-                subtotal = x.Product.Price * x.Quantity
-            });
-
-            var total = cart.Items.Sum(
-                x => x.Product.Price * x.Quantity
-            );
-
-            return Ok(new
-            {
-                cart.Id,
-                cart.UserId,
-                items,
-                total
-            });
+            var cart = await _cartService.GetCartAsync(userId);
+            return Ok(cart);
         }
 
         [HttpPost("{userId:int}/items")]
-        public async Task<IActionResult> AddToCart(
-            int userId,
-            AddToCartDto dto)
+        public async Task<IActionResult> AddToCart(int userId, AddToCartDto dto)
         {
-            if (dto.Quantity <= 0)
-                return BadRequest("Quantity must be greater than zero.");
+            var (success, errorMessage) = await _cartService.AddToCartAsync(userId, dto);
 
-            var product = await _context.Products
-                .FirstOrDefaultAsync(x => x.Id == dto.ProductId);
-
-            if (product is null)
-                return NotFound("Product not found.");
-
-            if (product.Stock < dto.Quantity)
-                return BadRequest("Not enough stock.");
-
-            var cart = await _context.Carts
-                .Include(x => x.Items)
-                .FirstOrDefaultAsync(x => x.UserId == userId);
-
-            if (cart is null)
-            {
-                cart = new Cart
-                {
-                    UserId = userId
-                };
-
-                _context.Carts.Add(cart);
-            }
-
-            var existingItem = cart.Items
-                .FirstOrDefault(x => x.ProductId == dto.ProductId);
-
-            if (existingItem is not null)
-            {
-                if (existingItem.Quantity + dto.Quantity > product.Stock)
-                    return BadRequest("Not enough stock.");
-
-                existingItem.Quantity += dto.Quantity;
-            }
-            else
-            {
-                cart.Items.Add(new CartItem
-                {
-                    ProductId = dto.ProductId,
-                    Quantity = dto.Quantity
-                });
-            }
-
-            await _context.SaveChangesAsync();
+            if (!success)
+                return BadRequest(errorMessage);
 
             return Ok();
         }
 
         [HttpPut("{userId:int}/items/{productId:int}")]
-        public async Task<IActionResult> UpdateQuantity(
-            int userId,
-            int productId,
-            [FromQuery] int quantity)
+        public async Task<IActionResult> UpdateQuantity(int userId, int productId, [FromQuery] int quantity)
         {
-            if (quantity <= 0)
-                return BadRequest("Quantity must be greater than zero.");
+            var (success, errorMessage) = await _cartService.UpdateQuantityAsync(userId, productId, quantity);
 
-            var cartItem = await _context.CartItems
-                .Include(x => x.Cart)
-                .Include(x => x.Product)
-                .FirstOrDefaultAsync(x =>
-                    x.Cart.UserId == userId &&
-                    x.ProductId == productId);
-
-            if (cartItem is null)
-                return NotFound("Cart item not found.");
-
-            if (quantity > cartItem.Product.Stock)
-                return BadRequest("Not enough stock.");
-
-            cartItem.Quantity = quantity;
-
-            await _context.SaveChangesAsync();
+            if (!success)
+                return BadRequest(errorMessage);
 
             return Ok();
         }
 
         [HttpDelete("{userId:int}/items/{productId:int}")]
-        public async Task<IActionResult> RemoveFromCart(
-            int userId,
-            int productId)
+        public async Task<IActionResult> RemoveFromCart(int userId, int productId)
         {
-            var cartItem = await _context.CartItems
-                .Include(x => x.Cart)
-                .FirstOrDefaultAsync(x =>
-                    x.Cart.UserId == userId &&
-                    x.ProductId == productId);
+            var (success, errorMessage) = await _cartService.RemoveFromCartAsync(userId, productId);
 
-            if (cartItem is null)
-                return NotFound("Cart item not found.");
-
-            _context.CartItems.Remove(cartItem);
-
-            await _context.SaveChangesAsync();
+            if (!success)
+                return NotFound(errorMessage);
 
             return NoContent();
         }
@@ -169,17 +58,7 @@ namespace ECommerceAppMorning.Server.Controllers
         [HttpDelete("{userId:int}")]
         public async Task<IActionResult> ClearCart(int userId)
         {
-            var cart = await _context.Carts
-                .Include(x => x.Items)
-                .FirstOrDefaultAsync(x => x.UserId == userId);
-
-            if (cart is null)
-                return NoContent();
-
-            _context.CartItems.RemoveRange(cart.Items);
-
-            await _context.SaveChangesAsync();
-
+            await _cartService.ClearCartAsync(userId);
             return NoContent();
         }
     }
